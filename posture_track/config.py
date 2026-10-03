@@ -4,7 +4,9 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from .runtime import resource_root
+
+ROOT = resource_root()
 INTERVALS = {"Low": 5.0, "Mid": 2.0, "High": 0.5}
 ALERT_DELAYS = {"10초":10,"20초":20,"1분":60,"2분":120,"5분":300,"10분":600,"20분":1200}
 POSTURE_SENSITIVITY = {"standard": (.60, 2.5), "sensitive": (.475, 2.25)}

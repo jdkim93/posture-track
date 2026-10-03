@@ -1,0 +1,40 @@
+name: Windows installer
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Prepare application
+        shell: pwsh
+        run: ./setup.ps1
+      - name: Test
+        run: ./.venv/Scripts/python.exe -m unittest discover -s tests
+      - name: Install installer compiler
+        run: choco install innosetup --yes --no-progress
+      - name: Build installer
+        shell: pwsh
+        run: ./tools/build_installer.ps1
+      - name: Check bundled models and UI
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $taskReport = Join-Path $PWD 'artifacts/package-check.json'
+          $taskCheck = Start-Process dist/PostureTrack/PostureTrack.exe -ArgumentList '--self-check', $taskReport -Wait -PassThru
+          if ($taskCheck.ExitCode -ne 0 -or -not (Test-Path $taskReport)) { throw 'Bundled model check failed' }
+          $taskUi = Start-Process dist/PostureTrack/PostureTrack.exe -ArgumentList '--demo', '--ui-smoke', '--data-dir', 'artifacts/package-ui' -Wait -PassThru
+          if ($taskUi.ExitCode -ne 0) { throw 'Bundled UI check failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PostureTrack-Windows-Installer
+          path: dist/installer/*.exe
+          if-no-files-found: error

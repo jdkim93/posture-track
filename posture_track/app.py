@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .config import ROOT, TARGETS, Settings, ALERT_DELAYS
 from .privacy import enforce_local_only
+from .runtime import default_data_dir, acquire_instance
 
 BG, PANEL, LINE = "#18191e", "#25272e", "#33363f"
 TEXT, MUTED, GREEN, GOLD, RED = "#edf0f4", "#a0a6b1", "#a8c8e4", "#d0b28d", "#e59c9e"
@@ -33,6 +34,8 @@ class App:
             pass
         self.tk, self.ttk, self.args = tk, ttk, args
         self.root = tk.Tk()
+        if args.background:
+            self.root.withdraw()
         self.root.title("Posture Track")
         from PIL import Image, ImageTk
         self.app_icon = ImageTk.PhotoImage(Image.open(ROOT / "assets" / "posture-track.png"))
@@ -43,7 +46,7 @@ class App:
         self.root.geometry(f"{width}x{height}+30+30")
         self.root.minsize(980, 740)
         self.root.configure(bg=BG)
-        self.directory = Path(args.data_dir).resolve() if args.data_dir else ROOT / ".data" / ("demo" if args.demo else "local")
+        self.directory = Path(args.data_dir).resolve() if args.data_dir else default_data_dir(args.demo)
         self.settings = Settings.load(self.directory / "settings.json")
         from .cameras import connected_cameras
         try:
@@ -80,6 +83,8 @@ class App:
         self.root.after(80, self.poll)
         if self.cameras or args.demo:
             self.worker.submit("start")
+        if args.background:
+            self.root.after(0, self.hide)
         if args.ui_smoke:
             self.root.after(2500, self.check_ui_smoke)
 
@@ -1079,7 +1084,15 @@ class App:
             self.root.destroy()
 
     def run(self):
+        errors = []
+        if self.args.ui_smoke:
+            def smoke_exception(kind, error, traceback):
+                errors.append(error)
+                self.close()
+            self.root.report_callback_exception = smoke_exception
         self.root.mainloop()
+        if errors:
+            raise RuntimeError("UI smoke check failed") from errors[0]
 
 
 def main():
@@ -1090,6 +1103,8 @@ def main():
     parser.add_argument("--validation-capture", action="store_true", help="Explicit test-only: save one raw frame and matching measurements per completed trial locally")
     parser.add_argument("--data-dir", help="Local settings and records directory")
     parser.add_argument("--ui-smoke", action="store_true", help="Demo UI widget check then exit; no screenshots; requires --demo")
+    parser.add_argument("--background", action="store_true", help="Start in the system tray at Windows sign-in")
+    parser.add_argument("--self-check", metavar="REPORT", help="Verify bundled assets and models offline, write a JSON report, then exit")
     args = parser.parse_args()
     if args.ui_smoke and not args.demo:
         parser.error("--ui-smoke requires --demo; it never captures a webcam or screen")
@@ -1098,4 +1113,25 @@ def main():
     if args.validation_capture and (args.demo or args.release_alerts or args.ui_smoke):
         parser.error("--validation-capture requires real-camera test mode")
     enforce_local_only()
+    if args.self_check:
+        import json
+        import numpy as np
+        from .vision import LocalModels
+        for name in ("posture-track.ico", "posture-track.png"):
+            assert (ROOT / "assets" / name).is_file(), name
+        models = LocalModels(ROOT / "models")
+        try:
+            models.ensure(hands=True)
+            observation = models.detect(np.zeros((480, 640, 3), dtype=np.uint8), 1.0)
+            assert not observation.pose and not observation.face and not observation.hands
+        finally:
+            models.close()
+        Path(args.self_check).write_text(json.dumps({"ok": True, "resources": str(ROOT), "data": str(default_data_dir())}), encoding="utf-8")
+        return
+    import sys
+    if getattr(sys, "frozen", False) and not args.demo and not acquire_instance():
+        if not args.background:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, "이미 실행 중입니다. 작업 표시줄의 트레이 아이콘에서 창을 열어 주세요.", "Posture Track", 64)
+        return
     App(args).run()
